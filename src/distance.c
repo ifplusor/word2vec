@@ -30,24 +30,29 @@ int main(int argc, char **argv) {
   float dist, len, bestd[N], vec[max_size];
   long long words, size, a, b, c, d, cn, bi[100];
   char ch;
-  float *M;
-  char *vocab;
+  float *M;  // 单位向量
+  char *vocab;  // vocabulary
+
   if (argc < 2) {
     printf("Usage: ./distance <FILE>\nwhere FILE contains word projections in the BINARY FORMAT\n");
     return 0;
   }
+
   strcpy(file_name, argv[1]);
   f = fopen(file_name, "rb");
   if (f == NULL) {
     printf("Input file not found\n");
     return -1;
   }
-  fscanf(f, "%lld", &words);
-  fscanf(f, "%lld", &size);
-  vocab = (char *)malloc((long long)words * max_w * sizeof(char));
-  M = (float *)malloc((long long)words * (long long)size * sizeof(float));
+
+  // 读取 word projections
+  fscanf(f, "%lld", &words);  // 读取词表数量
+  fscanf(f, "%lld", &size);  // 读取词向量长度
+  vocab = (char *)malloc((long long)words * max_w * sizeof(char));  // 给词表分配内存
+  M = (float *)malloc((long long)words * (long long)size * sizeof(float));  // 给向量表分配内存
   if (M == NULL) {
-    printf("Cannot allocate memory: %lld MB    %lld  %lld\n", (long long)words * size * sizeof(float) / 1048576, words, size);
+    printf("Cannot allocate memory: %lld MB    %lld  %lld\n",
+           (long long)words * size * sizeof(float) / 1048576, words, size);
     return -1;
   }
   for (b = 0; b < words; b++) {
@@ -55,24 +60,30 @@ int main(int argc, char **argv) {
     for (a = 0; a < size; a++) fread(&M[a + b * size], sizeof(float), 1, f);
     len = 0;
     for (a = 0; a < size; a++) len += M[a + b * size] * M[a + b * size];
-    len = sqrt(len);
-    for (a = 0; a < size; a++) M[a + b * size] /= len;
+    len = (float) sqrt(len);  // 欧氏长度
+    for (a = 0; a < size; a++) M[a + b * size] /= len;  // 单位向量
   }
   fclose(f);
+
+  // 主循环
   while (1) {
     for (a = 0; a < N; a++) bestd[a] = 0;
     for (a = 0; a < N; a++) bestw[a][0] = 0;
     printf("Enter word or sentence (EXIT to break): ");
     a = 0;
     while (1) {
-      st1[a] = fgetc(stdin);
+      st1[a] = (char) fgetc(stdin);
       if ((st1[a] == '\n') || (a >= max_size - 1)) {
         st1[a] = 0;
         break;
       }
       a++;
     }
+
+    // 退出
     if (!strcmp(st1, "EXIT")) break;
+
+    // 以空格切分输入
     cn = 0;
     b = 0;
     c = 0;
@@ -89,6 +100,8 @@ int main(int argc, char **argv) {
       }
     }
     cn++;
+
+    // 定位输入在词表中的索引
     for (a = 0; a < cn; a++) {
       for (b = 0; b < words; b++) if (!strcmp(&vocab[b * max_w], st[a])) break;
       if (b == words) b = -1;
@@ -100,26 +113,35 @@ int main(int argc, char **argv) {
       }
     }
     if (b == -1) continue;
-    printf("\n                                              Word       Cosine distance\n------------------------------------------------------------------------\n");
+
+    printf("\n                                              Word       Cosine distance");
+    printf("\n------------------------------------------------------------------------\n");
+
     for (a = 0; a < size; a++) vec[a] = 0;
     for (b = 0; b < cn; b++) {
       if (bi[b] == -1) continue;
       for (a = 0; a < size; a++) vec[a] += M[a + bi[b] * size];
     }
+
     len = 0;
     for (a = 0; a < size; a++) len += vec[a] * vec[a];
-    len = sqrt(len);
-    for (a = 0; a < size; a++) vec[a] /= len;
+    len = (float) sqrt(len);
+    for (a = 0; a < size; a++) vec[a] /= len;  // 单位向量
+
     for (a = 0; a < N; a++) bestd[a] = 0;
     for (a = 0; a < N; a++) bestw[a][0] = 0;
+
     for (c = 0; c < words; c++) {
       a = 0;
       for (b = 0; b < cn; b++) if (bi[b] == c) a = 1;
-      if (a == 1) continue;
+      if (a == 1) continue;  // 输入词，跳过
+
       dist = 0;
-      for (a = 0; a < size; a++) dist += vec[a] * M[a + c * size];
+      for (a = 0; a < size; a++) dist += vec[a] * M[a + c * size];  // 余弦
+
       for (a = 0; a < N; a++) {
         if (dist > bestd[a]) {
+          // 插入排序
           for (d = N - 1; d > a; d--) {
             bestd[d] = bestd[d - 1];
             strcpy(bestw[d], bestw[d - 1]);
@@ -130,6 +152,7 @@ int main(int argc, char **argv) {
         }
       }
     }
+
     for (a = 0; a < N; a++) printf("%50s\t\t%f\n", bestw[a], bestd[a]);
   }
   return 0;
