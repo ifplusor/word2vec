@@ -8,7 +8,7 @@ TEXT_DATA=$DATA_DIR/text8
 ZIPPED_TEXT_DATA="${TEXT_DATA}.zip"
 VECTOR_DATA=$DATA_DIR/text8-vector.bin
 
-pushd ${SRC_DIR} && make; popd
+# pushd ${SRC_DIR} && make; popd
 
 if [ ! -e $VECTOR_DATA ]; then
   

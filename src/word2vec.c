@@ -18,6 +18,20 @@
 #include <math.h>
 #include <pthread.h>
 
+
+#ifdef WIN32
+
+#include <time.h>
+
+/* winpthread 下未定义 posix_memalign 函数 */
+int posix_memalign(void **memptr, size_t alignment, size_t size) {
+  *memptr = _aligned_malloc(size, alignment);
+  if (*memptr == NULL) return -1;
+  return 0;
+}
+
+#endif
+
 #define MAX_STRING 100
 #define EXP_TABLE_SIZE 1000
 #define MAX_EXP 6
@@ -380,6 +394,17 @@ void InitNet() {
 }
 
 void DestroyNet() {
+#ifdef WIN32
+  if (syn0 != NULL) {
+    _aligned_free(syn0);
+  }
+  if (syn1 != NULL) {
+    _aligned_free(syn1);
+  }
+  if (syn1neg != NULL) {
+    _aligned_free(syn1neg);
+  }
+#else
   if (syn0 != NULL) {
     free(syn0);
   }
@@ -389,6 +414,7 @@ void DestroyNet() {
   if (syn1neg != NULL) {
     free(syn1neg);
   }
+#endif
 }
 
 void *TrainModelThread(void *id) {
@@ -429,7 +455,7 @@ void *TrainModelThread(void *id) {
         if (word == 0) break;
         // The subsampling randomly discards frequent words while keeping the ranking same
         if (sample > 0) {
-          real ran = (sqrt(vocab[word].cn / (sample * train_words)) + 1) * (sample * train_words) / vocab[word].cn;
+            real ran = (sqrt(vocab[word].cn / (sample * train_words)) + 1) * (sample * train_words) / vocab[word].cn;
           next_random = next_random * (unsigned long long)25214903917 + 11;
           if (ran < (next_random & 0xFFFF) / (real)65536) continue;
         }
@@ -462,9 +488,8 @@ void *TrainModelThread(void *id) {
         l2 = vocab[word].point[d] * layer1_size;
         // Propagate hidden -> output
         for (c = 0; c < layer1_size; c++) f += neu1[c] * syn1[c + l2];
-        if (f <= -MAX_EXP) continue;
-        else if (f >= MAX_EXP) continue;
-        else f = expTable[(int)((f + MAX_EXP) * (EXP_TABLE_SIZE / MAX_EXP / 2))];
+        if (f <= -MAX_EXP || f >= MAX_EXP) continue;
+        f = expTable[(int)((f + MAX_EXP) * (EXP_TABLE_SIZE / MAX_EXP / 2))];
         // 'g' is the gradient multiplied by the learning rate
         g = (1 - vocab[word].code[d] - f) * alpha;
         // Propagate errors output -> hidden
@@ -517,9 +542,8 @@ void *TrainModelThread(void *id) {
           l2 = vocab[word].point[d] * layer1_size;
           // Propagate hidden -> output
           for (c = 0; c < layer1_size; c++) f += syn0[c + l1] * syn1[c + l2];
-          if (f <= -MAX_EXP) continue;
-          else if (f >= MAX_EXP) continue;
-          else f = expTable[(int)((f + MAX_EXP) * (EXP_TABLE_SIZE / MAX_EXP / 2))];
+          if (f <= -MAX_EXP || f >= MAX_EXP) continue;
+          f = expTable[(int)((f + MAX_EXP) * (EXP_TABLE_SIZE / MAX_EXP / 2))];
           // 'g' is the gradient multiplied by the learning rate
           g = (1 - vocab[word].code[d] - f) * alpha;
           // Propagate errors output -> hidden
@@ -562,6 +586,7 @@ void *TrainModelThread(void *id) {
   free(neu1);
   free(neu1e);
   pthread_exit(NULL);
+  return 0;
 }
 
 void TrainModel() {
@@ -728,6 +753,10 @@ int main(int argc, char **argv) {
   if ((i = ArgPos((char *)"-threads", argc, argv)) > 0) num_threads = atoi(argv[i + 1]);
   if ((i = ArgPos((char *)"-min-count", argc, argv)) > 0) min_count = atoi(argv[i + 1]);
   if ((i = ArgPos((char *)"-classes", argc, argv)) > 0) classes = atoi(argv[i + 1]);
+
+  printf("train file: %s\n", train_file);
+  printf("output file: %s\n", output_file);
+
   vocab = (struct vocab_word *)calloc(vocab_max_size, sizeof(struct vocab_word));
   vocab_hash = (int *)calloc(vocab_hash_size, sizeof(int));
   expTable = (real *)malloc((EXP_TABLE_SIZE + 1) * sizeof(real));
