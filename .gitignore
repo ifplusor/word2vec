@@ -5,8 +5,9 @@
 /bin/*
 !/bin/.placeholder
 
-.idea
+.idea/
 cmake-build-debug
 build
 
+*.iml
 *.swp
