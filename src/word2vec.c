@@ -480,10 +480,10 @@ void *TrainModelThread(void *id) {
   long long word_count = 0, last_word_count = 0, sen[MAX_SENTENCE_LENGTH + 1];
   long long l1, l2, c, target, label;
   unsigned long long next_random = (long long) id;
-  real f, g, q;
+  real f, g;
   clock_t now;
 
-  // neu1 对应投影层输出，neu1e 对应投影层损失
+  // neu1 对应投影层输出，neu1e 对应投影层误差
   real *neu1 = (real *) calloc(layer1_size, sizeof(real));
   real *neu1e = (real *) calloc(layer1_size, sizeof(real));
 
@@ -517,8 +517,8 @@ void *TrainModelThread(void *id) {
       if (alpha < starting_alpha * 0.0001) alpha = starting_alpha * 0.0001;
     }
 
+    // 读取语料（一个句子）
     if (sentence_length == 0) {
-      // 读取语料（一个句子）
       while (1) {
         word = ReadWordIndex(fi);
         if (feof(fi)) break;
@@ -543,13 +543,15 @@ void *TrainModelThread(void *id) {
     if (feof(fi)) break;
     if (word_count > train_words / num_threads) break; // 线程分数据
 
+    // 遍历句子中的词
     word = sen[sentence_position];
     if (word == -1) continue;
 
+    // 初始化
     for (c = 0; c < layer1_size; c++) neu1[c] = 0;
     for (c = 0; c < layer1_size; c++) neu1e[c] = 0;
     next_random = next_random * (unsigned long long) 25214903917 + 11;
-    b = next_random % window;
+    b = next_random % window; // 随机半窗口大小
 
     if (cbow) {  //train the cbow architecture
       // in -> hidden 正向传播
@@ -594,9 +596,7 @@ void *TrainModelThread(void *id) {
 
       // NEGATIVE SAMPLING
       if (negative > 0) {
-        // neu1: 对应 投影层输出，即对应词向量的 sum
-        // neu1e: 对应 投影层梯度
-        // syn1neg: 对应 输出层连接参数
+        // 采样 negative 个负样本 + 1 个正样本
         for (d = 0; d < negative + 1; d++) {
           if (d == 0) {
             // 正样本
@@ -613,7 +613,7 @@ void *TrainModelThread(void *id) {
           l2 = target * layer1_size;
 
           // define:
-          //   w is word, C is sentence, x(w) is neu1, theta(w) is syn1ney[l2]
+          //   w is word, C is sentence, x(w) is neu1, theta(w) is syn1neg[l2]
           //
           //   g(w) = TT u in {w} + NEG(w): p(u | Context(w))
           //
@@ -645,22 +645,27 @@ void *TrainModelThread(void *id) {
           //   L1(w,u) = L-w(u) * log[sigmoid(x-w * theta-u)]
           //               + (1 - L-w(u)) * log[1 - sigmoid(x-w * theta-u)]
           //
-          //   derivative(L1/u) = L-w(u) * [1 - sigmoid(x-w * theta-u)] * x-w
+          //   derivative(L1/theta-u)
+          //       = L-w(u) * [1 - sigmoid(x-w * theta-u)] * x-w
           //           - [1 - L-w(u)] * sigmoid(x-w * theta-u) * x-w
           //       = {L-w(u) * [1 - sigmoid(x-w * theta-u)]
           //           - [1 - L-w(u)] * sigmoid(x-w * theta-u)} * x-w
           //       = [L-w(u) - sigmoid(x-w * theta-u)] * x-w
           //
-          //   theta-u = theta-u + eta * [L-w(u) - sigmoid(x-w * theta-u)] * x-w
+          //   theta-u = theta-u + eta * derivative(L1/theta-u)
+          //           = theta-u + eta * [L-w(u) - sigmoid(x-w * theta-u)] * x-w
+          //
+          //   derivative(L1/x-w)
+          //       = [L-w(u) - sigmoid(x-w * theta-u)] * theta-u
           //
           // in the following text:
           //    alpha is eta
-          //    f is x-w * theta-u,
-          //    g is [L-w(u) - sigmoid(x-w * theta-u)] * eta,
+          //    f is x-w * theta-u
+          //    g is [L-w(u) - sigmoid(x-w * theta-u)] * eta
           //
-          //    neu1 is x-w
-          //    neu1e is theta-u
-          //    syn1neg is
+          //    neu1 is x(w)
+          //    neu1e is error of neu1
+          //    syn1neg is theta(u)
           //
 
           // 线性和，没偏置？
@@ -668,21 +673,21 @@ void *TrainModelThread(void *id) {
           for (c = 0; c < layer1_size; c++)
             f += neu1[c] * syn1neg[c + l2];
 
-          // 计算梯度 g
+          // 计算公共项 g
           if (f > MAX_EXP) {
             g = (label - 1) * alpha;
           } else if (f < -MAX_EXP) {
             g = (label - 0) * alpha;
           } else {
-            q = sigmoid(f);
-            g = (label - q) * alpha;
+            g = (label - sigmoid(f)) * alpha;
           }
 
-          // 更新参数
+          // 更新参数，注意更新顺序
           for (c = 0; c < layer1_size; c++) neu1e[c] += g * syn1neg[c + l2];
           for (c = 0; c < layer1_size; c++) syn1neg[c + l2] += g * neu1[c];
         }
       }
+
       // hidden -> in
       for (a = b; a < window * 2 + 1 - b; a++) {
         if (a != window) {
@@ -696,13 +701,18 @@ void *TrainModelThread(void *id) {
         }
       }
     } else {  //train skip-gram
+      // 遍历上下文
       for (a = b; a < window * 2 + 1 - b; a++) {
-        if (a != window) {
+        if (a != window) { // 上下文不包含中心词
           c = sentence_position - window + a;
+
+          // 不在句子范围
           if (c < 0) continue;
           if (c >= sentence_length) continue;
+
           last_word = sen[c];
-          if (last_word == -1) continue;
+          if (last_word == -1) continue; // 不在词表中
+
           l1 = last_word * layer1_size;
           for (c = 0; c < layer1_size; c++) neu1e[c] = 0;
 
@@ -742,24 +752,30 @@ void *TrainModelThread(void *id) {
                 label = 0;
               }
               l2 = target * layer1_size;
+
               f = 0;
               for (c = 0; c < layer1_size; c++)
                 f += syn0[c + l1] * syn1neg[c + l2];
-              if (f > MAX_EXP) g = (label - 1) * alpha;
-              else if (f < -MAX_EXP) g = (label - 0) * alpha;
-              else
-                g = (label - expTable[(int) ((f + MAX_EXP)
-                    * (EXP_TABLE_SIZE / MAX_EXP / 2))]) * alpha;
+
+              if (f > MAX_EXP) {
+                g = (label - 1) * alpha;
+              } else if (f < -MAX_EXP) {
+                g = (label - 0) * alpha;
+              } else {
+                g = (label - sigmoid(f)) * alpha;
+              }
+
               for (c = 0; c < layer1_size; c++) neu1e[c] += g * syn1neg[c + l2];
-              for (c = 0; c < layer1_size; c++)
-                syn1neg[c + l2] += g * syn0[c + l1];
+              for (c = 0; c < layer1_size; c++) syn1neg[c + l2] += g * syn0[c + l1];
             }
           }
+
           // Learn weights input -> hidden
           for (c = 0; c < layer1_size; c++) syn0[c + l1] += neu1e[c];
         }
       }
     }
+
     sentence_position++;
     if (sentence_position >= sentence_length) {
       sentence_length = 0;
