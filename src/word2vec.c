@@ -572,9 +572,11 @@ void *TrainModelThread(void *id) {
           last_word = sen[c];
           if (last_word == -1) continue; // 不在词表中
 
+          l1 = last_word * layer1_size;
+
           // SUM of syn0(word vector)
           for (c = 0; c < layer1_size; c++)
-            neu1[c] += syn0[c + last_word * layer1_size];
+            neu1[c] += syn0[c + l1];
         }
       }
 
@@ -806,6 +808,10 @@ void *TrainModelThread(void *id) {
           if (last_word == -1) continue; // 不在词表中
 
           l1 = last_word * layer1_size;
+
+          for (c = 0; c < layer1_size; c++)
+            neu1[c] = syn0[c + l1];
+
           for (c = 0; c < layer1_size; c++) neu1e[c] = 0;
 
           // HIERARCHICAL SOFTMAX
@@ -816,7 +822,7 @@ void *TrainModelThread(void *id) {
               // Propagate hidden -> output
               f = 0;
               for (c = 0; c < layer1_size; c++)
-                f += syn0[c + l1] * syn1[c + l2];
+                f += neu1[c] * syn1[c + l2];
               if (f <= -MAX_EXP || f >= MAX_EXP) continue;
               f = sigmoid(f);
 
@@ -826,7 +832,7 @@ void *TrainModelThread(void *id) {
               // Propagate errors output -> hidden
               for (c = 0; c < layer1_size; c++) neu1e[c] += g * syn1[c + l2];
               // Learn weights hidden -> output
-              for (c = 0; c < layer1_size; c++) syn1[c + l2] += g * syn0[c + l1];
+              for (c = 0; c < layer1_size; c++) syn1[c + l2] += g * neu1[c];
             }
           }
 
@@ -848,7 +854,7 @@ void *TrainModelThread(void *id) {
 
               f = 0;
               for (c = 0; c < layer1_size; c++)
-                f += syn0[c + l1] * syn1neg[c + l2];
+                f += neu1[c] * syn1neg[c + l2];
 
               if (f > MAX_EXP) {
                 g = (label - 1) * alpha;
@@ -859,7 +865,7 @@ void *TrainModelThread(void *id) {
               }
 
               for (c = 0; c < layer1_size; c++) neu1e[c] += g * syn1neg[c + l2];
-              for (c = 0; c < layer1_size; c++) syn1neg[c + l2] += g * syn0[c + l1];
+              for (c = 0; c < layer1_size; c++) syn1neg[c + l2] += g * neu1[c];
             }
           }
 
