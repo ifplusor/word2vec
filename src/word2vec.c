@@ -566,7 +566,7 @@ void *TrainModelThread(void *id) {
     if (cbow) {  //train the cbow architecture
       // in -> hidden 正向传播
 
-      //           pos-win+b <- content -> pos+win-b
+      //           pos-win+b <- context -> pos+win-b
       //  --+----------+-----------o-----------+----------+--
       // pos-win                  pos                  pos+win
       for (a = b; a < window * 2 + 1 - b; a++) {
@@ -633,7 +633,7 @@ void *TrainModelThread(void *id) {
           //
           // so,
           //   loss = Sigma w in C: log p(w | Context(w))
-          //        = Sigma w in C: log TT j in [2...l(w)]: p(w | Context(w))
+          //        = Sigma w in C: log TT j in [2...l(w)]: p(d-w_j | x-w, theta-w_j-1)
           //        = Sigma w in C: log TT j in [2...l(w)]:
           //            {sigmoid(x-w * theta-w_j-1) ^ [1 - d-w_j]
           //                * [1 - sigmoid(x-w * theta-w_j-1)] ^ d-w_j}
