@@ -260,6 +260,12 @@ void CreateBinaryTree() {
   for (a = vocab_size; a < vocab_size * 2; a++) count[a] = 1e15;
   pos1 = vocab_size - 1;
   pos2 = vocab_size;
+
+  // | <---- desc ----> || <----- asc -----> |
+  //        <- pos1              pos2 ->
+  // +----------+--------+--------+----------+
+  // 0               vocab_size        2*vocab_size-1
+
   // Following algorithm constructs the Huffman tree by adding one node at a time
   for (a = 0; a < vocab_size - 1; a++) {
     // First, find two smallest nodes 'min1, min2'
@@ -292,6 +298,7 @@ void CreateBinaryTree() {
     parent_node[min2i] = vocab_size + a;
     binary[min2i] = 1;
   }
+
   // Now assign binary code to each vocabulary word
   for (a = 0; a < vocab_size; a++) {
     b = a;
@@ -310,6 +317,7 @@ void CreateBinaryTree() {
       vocab[a].point[i - b] = point[b] - vocab_size;
     }
   }
+
   free(count);
   free(binary);
   free(parent_node);
