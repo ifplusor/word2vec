@@ -1021,7 +1021,7 @@ int main(int argc, char **argv) {
 
   // e^z = 1 + z/1! + z^2/2! + z^3/3! + ...
   //
-  // sigmoid(x) = 1 / (1 + e^-x)
+  // sigmoid(x) = 1 / (1 + e^-x) = e^x / (e^x + 1)
   // sigmoid'(x) = sigmoid(x) * [1 - sigmoid(x)]
   //
   // [log(sigmoid(x))]' = 1 - sigmoid(x)
@@ -1042,7 +1042,7 @@ int main(int argc, char **argv) {
   //       = (i * 2 / EXP_TABLE_SIZE - 1) * MAX_EXP
   //       = (i / EXP_TABLE_SIZE * 2 - 1) * MAX_EXP
   //
-  for (i = 0; i < EXP_TABLE_SIZE; i++) {
+  for (i = 0; i <= EXP_TABLE_SIZE; i++) {
     // pre-compute the exp() table
     expTable[i] = (real) exp((i / (real) EXP_TABLE_SIZE * 2 - 1) * MAX_EXP);
     // pre-compute f(x) = x / (x + 1)
