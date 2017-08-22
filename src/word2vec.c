@@ -155,9 +155,8 @@ int AddWordToVocab(char *word) {
   // Reallocate memory if needed
   if (vocab_size + 2 >= vocab_max_size) {
     vocab_max_size += 1000;
-    vocab = (struct vocab_word *) realloc(vocab,
-                                          vocab_max_size
-                                              * sizeof(struct vocab_word));
+    vocab = (struct vocab_word *)
+        realloc(vocab, vocab_max_size * sizeof(struct vocab_word));
   }
   hash = GetWordHash(word);
   while (vocab_hash[hash] != -1) hash = (hash + 1) % vocab_hash_size;
@@ -172,7 +171,6 @@ int VocabCompare(const void *a, const void *b) {
 
 void DestroyVocab() {
   int a;
-
   for (a = 0; a < vocab_size; a++) {
     if (vocab[a].word != NULL) {
       free(vocab[a].word);
@@ -190,26 +188,28 @@ void DestroyVocab() {
 
 // Sorts the vocabulary by frequency using word counts
 void SortVocab() {
-  int a, size;
+  int a;
   unsigned int hash;
   // Sort the vocabulary order by desc and keep </s> at the first position
   qsort(&vocab[1], vocab_size - 1, sizeof(struct vocab_word), VocabCompare);
-  for (a = 0; a < vocab_hash_size; a++) vocab_hash[a] = -1;
-  size = vocab_size;
   train_words = 0;
-  for (a = 1; a < size; a++) { // Skip </s>
+  for (a = vocab_size - 1; a > 0; a--) {
     // Words occuring less than min_count times will be discarded from the vocab
     if (vocab[a].cn < min_count) {
       vocab_size--;
       free(vocab[a].word);
       vocab[a].word = NULL;
     } else {
-      // Hash will be re-computed, as after the sorting it is not actual
-      hash = GetWordHash(vocab[a].word);
-      while (vocab_hash[hash] != -1) hash = (hash + 1) % vocab_hash_size;
-      vocab_hash[hash] = a;
-      train_words += vocab[a].cn;
+      break;
     }
+  }
+  for (a = 0; a < vocab_hash_size; a++) vocab_hash[a] = -1;
+  for (a = 1; a < vocab_size; a++) { // Skip </s>
+    // Hash will be re-computed, as after the sorting it is not actual
+    hash = GetWordHash(vocab[a].word);
+    while (vocab_hash[hash] != -1) hash = (hash + 1) % vocab_hash_size;
+    vocab_hash[hash] = a;
+    train_words += vocab[a].cn;
   }
   vocab = (struct vocab_word *)
       realloc(vocab, (vocab_size + 1) * sizeof(struct vocab_word));
@@ -339,7 +339,9 @@ void LearnVocabFromTrainFile() {
     if (i == -1) {
       a = AddWordToVocab(word);
       vocab[a].cn = 1;
-    } else vocab[i].cn++;
+    } else {
+      vocab[i].cn++;
+    }
     if (vocab_size > vocab_hash_size * 0.7) ReduceVocab();
   }
   SortVocab();
@@ -576,17 +578,96 @@ void *TrainModelThread(void *id) {
         }
       }
 
+      // sigmoid and its derivative:
+      //   sigmoid(x) = 1 / (1 + e^-x) = e^x / (e^x + 1)
+      //   sigmoid'(x) = sigmoid(x) * [1 - sigmoid(x)]
+      //
+      // derivative of log:
+      //   log-a'(x) = 1 / x*ln(a)
+      //   ln'(x) = 1 / x
+      //
+      // in follow, the 'log' is alias of 'ln':
+      //   [log(sigmoid(x))]' = 1 / sigmoid(x) * sigmoid'(x)
+      //                      = 1 - sigmoid(x)
+      //   [log(1 - sigmoid(x))]' = -sigmoid(x)
+      //
+
       // HIERARCHICAL SOFTMAX
       if (hs) {
+        // 遍历从根到叶子结点的路径
         for (d = 0; d < vocab[word].codelen; d++) {
-          f = 0;
           l2 = vocab[word].point[d] * layer1_size;
+
+          // define:
+          //   w is center word
+          //   C is sentence
+          //
+          //   x(w) is neuron of projection layer
+          //
+          //   p(w) is the path from root to leaf which represent 'w'
+          //   l(w) is the length of p(w)
+          //   p(w)_1, p(w)_2,...,p(w)_l(w) is the nodes of p(w), p(w)_1 is root
+          //   d(w)_2, d(w)_3,...,d(w)_l(w) is the huffman code of p(w)
+          //   theta(w)_1, theta(w)_2,..., theta(w)_l(w)-1 is arguments of
+          //     non-leaf nodes in p(w)
+          //
+          //   p(w | Context(w)) = TT j in [2...l(w)]: p(d-w_j | x-w, theta-w_j-1)
+          //
+          //                                 +- sigmoid(x-w * theta-w_j-1),     if d(w)_j = 0
+          //   p(d-w_j | x-w, theta-w_j-1) = |
+          //                                 +- 1 - sigmoid(x-w * theta-w_j-1), if d(w)_j = 1
+          //
+          //   p(d-w_j | x-w, theta-w_j-1) =
+          //       sigmoid(x-w * theta-w_j-1) ^ [1 - d-w_j]
+          //           * [1 - sigmoid(x-w * theta-w_j-1)] ^ d-w_j
+          //
+          // so,
+          //   loss = Sigma w in C: log p(w | Context(w))
+          //        = Sigma w in C: log TT j in [2...l(w)]: p(w | Context(w))
+          //        = Sigma w in C: log TT j in [2...l(w)]:
+          //            {sigmoid(x-w * theta-w_j-1) ^ [1 - d-w_j]
+          //                * [1 - sigmoid(x-w * theta-w_j-1)] ^ d-w_j}
+          //        = Sigma w in C: Sigma j in [2...l(w)]:
+          //            {(1 - d-w_j) * log[sigmoid(x-w * theta-w_j-1)]
+          //                + d-w_j * log[1 - sigmoid(x-w * theta-w_j-1)]}
+          //
+          // define part of loss and gradient in here is:
+          //   L1(w, j) = (1 - d-w_j) * log[sigmoid(x-w * theta-w_j-1)]
+          //                + d-w_j * log[1 - sigmoid(x-w * theta-w_j-1)]
+          //
+          //   gradient(theta-w_j-1) = derivative(L1, theta-w_j-1)
+          //       = (1 - d-w_j) * [1 - sigmoid(x-w * theta-w_j-1)] * x-w
+          //           - d-w_j * sigmoid(x-w * theta-w_j-1) * x-w
+          //       = {(1 - d-w_j) * [1 - sigmoid(x-w * theta-w_j-1)]
+          //           - d-w_j * sigmoid(x-w * theta-w_j-1)} * x-w
+          //       = [1 - d-w_j - sigmoid(x-w * theta-w_j-1)] * x-w
+          //
+          //   theta-w_j-1 = theta-w_j-1 + eta * gradient(theta-w_j-1)
+          //       = theta-w_j-1
+          //           + eta * [1 - d-w_j - sigmoid(x-w * theta-w_j-1)] * x-w
+          //
+          //   gradient(x-w) = derivative(L1, x-w)
+          //       = [1 - d-w_j - sigmoid(x-w * theta-w_j-1)] * theta-w_j-1
+          //
+          // in the following text:
+          //   alpha is eta
+          //   f is sigmoid(x-w * theta-u)
+          //   g is [1 - d-w_j - sigmoid(x-w * theta-w_j-1)] * eta
+          //
+          //   neu1 is x(w)
+          //   neu1e is error of neu1
+          //   syn1 is theta(w)
+          //
+
           // Propagate hidden -> output
+          f = 0;
           for (c = 0; c < layer1_size; c++) f += neu1[c] * syn1[c + l2];
           if (f <= -MAX_EXP || f >= MAX_EXP) continue;
-          f = expTable[(int) ((f + MAX_EXP) * (EXP_TABLE_SIZE / MAX_EXP / 2))];
+          f = sigmoid(f);
+
           // 'g' is the gradient multiplied by the learning rate
           g = (1 - vocab[word].code[d] - f) * alpha;
+
           // Propagate errors output -> hidden
           for (c = 0; c < layer1_size; c++) neu1e[c] += g * syn1[c + l2];
           // Learn weights hidden -> output
@@ -610,12 +691,20 @@ void *TrainModelThread(void *id) {
             if (target == word) continue;
             label = 0;
           }
+
+          // target is one-hot code of input layer
           l2 = target * layer1_size;
 
           // define:
-          //   w is word, C is sentence, x(w) is neu1, theta(w) is syn1neg[l2]
+          //   w is center word
+          //   C is sentence
+          //   NEG(w) is negative samples set of 'w'
           //
-          //   g(w) = TT u in {w} + NEG(w): p(u | Context(w))
+          //   x(w) is neuron of projection layer
+          //   theta(w) is synapse between projection layer and output layer
+          //
+          //   g(w) = p(Context(w) | w)
+          //        = TT u in {w} + NEG(w): p(u | Context(w))
           //
           //            +- 1,  if u == w
           //   L-w(u) = |
@@ -631,41 +720,44 @@ void *TrainModelThread(void *id) {
           // so,
           //   g(w) = p(w | Context(w)) * TT u in NEG(w): p(u | Context(w))
           //        = sigmoid(x-w * theta-w)
-          //           * TT u in NEG(w): [1 - sigmoid(x-w * theta-u)]
+          //            * TT u in NEG(w): [1 - sigmoid(x-w * theta-u)]
           //
-          //   G = TT w in sentence: g(w)
+          //   G = TT w in C: g(w)
           //
-          //   loss = log G = log TT w in C g(w) = Sigma w in C: log g(w)
+          //   loss = log G
+          //        = log TT w in C: g(w)
+          //        = Sigma w in C: log g(w)
+          //        = Sigma w in C: log p(Context(w) | w)
           //        = Sigma w in C: log TT u in {w} + NEG(w): p(u | Context(w))
           //        = Sigma w in C: Sigma u in {w} + NEG(w):
           //            L-w(u) * log[sigmoid(x-w * theta-u)]
           //                + [1 - L-w(u)] * log[1 - sigmoid(x-w * theta-u)]
           //
-          // define part of loss in here is:
-          //   L1(w,u) = L-w(u) * log[sigmoid(x-w * theta-u)]
-          //               + (1 - L-w(u)) * log[1 - sigmoid(x-w * theta-u)]
+          // define part of loss and gradient in here is:
+          //   L1(w, u) = L-w(u) * log[sigmoid(x-w * theta-u)]
+          //                + (1 - L-w(u)) * log[1 - sigmoid(x-w * theta-u)]
           //
-          //   derivative(L1/theta-u)
+          //   gradient(theta-u) = derivative(L1, theta-u)
           //       = L-w(u) * [1 - sigmoid(x-w * theta-u)] * x-w
           //           - [1 - L-w(u)] * sigmoid(x-w * theta-u) * x-w
           //       = {L-w(u) * [1 - sigmoid(x-w * theta-u)]
           //           - [1 - L-w(u)] * sigmoid(x-w * theta-u)} * x-w
           //       = [L-w(u) - sigmoid(x-w * theta-u)] * x-w
           //
-          //   theta-u = theta-u + eta * derivative(L1/theta-u)
+          //   theta-u = theta-u + eta * gradient(theta-u)
           //           = theta-u + eta * [L-w(u) - sigmoid(x-w * theta-u)] * x-w
           //
-          //   derivative(L1/x-w)
+          //   gradient(x-u) = derivative(L1, x-w)
           //       = [L-w(u) - sigmoid(x-w * theta-u)] * theta-u
           //
           // in the following text:
-          //    alpha is eta
-          //    f is x-w * theta-u
-          //    g is [L-w(u) - sigmoid(x-w * theta-u)] * eta
+          //   alpha is eta
+          //   f is x-w * theta-u
+          //   g is [L-w(u) - sigmoid(x-w * theta-u)] * eta
           //
-          //    neu1 is x(w)
-          //    neu1e is error of neu1
-          //    syn1neg is theta(u)
+          //   neu1 is x(w)
+          //   neu1e is error of neu1
+          //   syn1neg is theta(u)
           //
 
           // 线性和，没偏置？
@@ -719,21 +811,22 @@ void *TrainModelThread(void *id) {
           // HIERARCHICAL SOFTMAX
           if (hs) {
             for (d = 0; d < vocab[word].codelen; d++) {
-              f = 0;
               l2 = vocab[word].point[d] * layer1_size;
+
               // Propagate hidden -> output
+              f = 0;
               for (c = 0; c < layer1_size; c++)
                 f += syn0[c + l1] * syn1[c + l2];
               if (f <= -MAX_EXP || f >= MAX_EXP) continue;
-              f = expTable[(int) ((f + MAX_EXP)
-                  * (EXP_TABLE_SIZE / MAX_EXP / 2))];
+              f = sigmoid(f);
+
               // 'g' is the gradient multiplied by the learning rate
               g = (1 - vocab[word].code[d] - f) * alpha;
+
               // Propagate errors output -> hidden
               for (c = 0; c < layer1_size; c++) neu1e[c] += g * syn1[c + l2];
               // Learn weights hidden -> output
-              for (c = 0; c < layer1_size; c++)
-                syn1[c + l2] += g * syn0[c + l1];
+              for (c = 0; c < layer1_size; c++) syn1[c + l2] += g * syn0[c + l1];
             }
           }
 
@@ -1019,28 +1112,28 @@ int main(int argc, char **argv) {
     exit(1);
   }
 
-  // e^z = 1 + z/1! + z^2/2! + z^3/3! + ...
-  //
-  // sigmoid(x) = 1 / (1 + e^-x) = e^x / (e^x + 1)
-  // sigmoid'(x) = sigmoid(x) * [1 - sigmoid(x)]
-  //
-  // [log(sigmoid(x))]' = 1 - sigmoid(x)
-  // [log(1 - sigmoid(x))]' = -sigmoid(x)
-
   // NOTE: MAX_EXP is 6, EXP_TABLE_SIZE is 1000
   //
   // region is [-MAX_EXP, MAX_EXP], map to [0, EXP_TABLE_SIZE]
   // so, step is 2*MAX_EXP / EXP_TABLE_SIZE
   //
   // region to index is:
-  //     i = (r + MAX_EXP) * (EXP_TABLE_SIZE / 2*MAX_EXP)
-  //       = (r + MAX_EXP) * (EXP_TABLE_SIZE / MAX_EXP / 2)
+  //   i = (r + MAX_EXP) * (EXP_TABLE_SIZE / 2*MAX_EXP)
+  //     = (r + MAX_EXP) * (EXP_TABLE_SIZE / MAX_EXP / 2)
   //
   // index to region is:
-  //     r = i / (EXP_TABLE_SIZE / 2*MAX_EXP) - MAX_EXP
-  //       = (i * 2*MAX_EXP) / EXP_TABLE_SIZE - MAX_EXP
-  //       = (i * 2 / EXP_TABLE_SIZE - 1) * MAX_EXP
-  //       = (i / EXP_TABLE_SIZE * 2 - 1) * MAX_EXP
+  //   r = i / (EXP_TABLE_SIZE / 2*MAX_EXP) - MAX_EXP
+  //     = (i * 2*MAX_EXP) / EXP_TABLE_SIZE - MAX_EXP
+  //     = (i * 2 / EXP_TABLE_SIZE - 1) * MAX_EXP
+  //     = (i / EXP_TABLE_SIZE * 2 - 1) * MAX_EXP
+  //
+  // approximation of exponential function:
+  //   e^z = 1 + z/1! + z^2/2! + z^3/3! + ...
+  // but we use library function 'exp'.
+  //
+  // sigmoid function:
+  //   sigmoid(x) = 1 / (1 + e^-x)
+  //              = e^x / (e^x + 1)
   //
   for (i = 0; i <= EXP_TABLE_SIZE; i++) {
     // pre-compute the exp() table
