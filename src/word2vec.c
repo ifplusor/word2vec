@@ -791,20 +791,20 @@ void *TrainModelThread(void *id) {
 
       // hidden -> in
       for (a = b; a < window * 2 + 1 - b; a++) {
-        if (a != window) {
-          c = sentence_position - window + a;
-          if (c < 0) continue;
-          if (c >= sentence_length) continue;
-          last_word = sen[c];
-          if (last_word == -1) continue;
-          for (c = 0; c < layer1_size; c++)
-            syn0[c + last_word * layer1_size] += neu1e[c];
-        }
+        if (a == window) continue;
+
+        c = sentence_position - window + a;
+        if (c < 0) continue;
+        if (c >= sentence_length) continue;
+        last_word = sen[c];
+        if (last_word == -1) continue;
+        for (c = 0; c < layer1_size; c++)
+          syn0[c + last_word * layer1_size] += neu1e[c];
       }
     } else {  //train skip-gram
       // 遍历上下文
       for (a = b; a < window * 2 + 1 - b; a++) {
-        if (a != window) continue; // 上下文不包含中心词
+        if (a == window) continue; // 上下文不包含中心词
         c = sentence_position - window + a;
 
         // 不在句子范围
