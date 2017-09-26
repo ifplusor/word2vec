@@ -450,7 +450,7 @@ void InitNet() {
   for (b = 0; b < layer1_size; b++)
     for (a = 0; a < vocab_size; a++)
       syn0[a * layer1_size + b] =
-          (real) (rand() / RAND_MAX - 0.5) / layer1_size;
+          (real) ((rand() / (real) RAND_MAX - 0.5) / layer1_size);
 
   // 构建 huffman tree
   CreateBinaryTree();
